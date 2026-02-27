@@ -3,12 +3,12 @@ from telebot import types
 import sqlite3
 from datetime import datetime
 
-TOKEN = 'আপনার_টোকেন_এখানে_দিন'  # ধাপ ১ থেকে পাওয়া টোকেন
-ADMIN_ID = 123456789  # আপনার আইডি (টেলিগ্রামে @userinfobot থেকে পাবেন)
+# আপনার দেওয়া তথ্য এখানে বসানো হয়েছে
+TOKEN = '8603236331:AAFE7dQpKBPi1UwOSV_ar5JL3hbfjtJWyjw' 
+ADMIN_ID = 7541488098 
 
 bot = telebot.TeleBot(TOKEN)
 
-# ডেটাবেস ফাংশন
 def init_db():
     conn = sqlite3.connect('data.db', check_same_thread=False)
     cursor = conn.cursor()
@@ -16,7 +16,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-# মেইন বাটন
 def main_btns():
     m = types.ReplyKeyboardMarkup(resize_keyboard=True)
     m.add("Nord VPN", "IG File", "IG Single account")
@@ -30,16 +29,19 @@ def start(msg):
 @bot.message_handler(func=lambda m: True)
 def handle(m):
     if m.text == "🔄 Restart":
-        bot.send_message(m.chat.id, "রিস্টার্ট হয়েছে!", reply_markup=main_btns())
+        bot.send_message(m.chat.id, "বট রিস্টার্ট হয়েছে!", reply_markup=main_btns())
     elif m.text in ["Nord VPN", "IG File", "IG Single account"]:
         bot.send_message(m.chat.id, f"আপনি {m.text} বেছে নিয়েছেন। এখন ফাইল পাঠান।")
-        # ডেটাবেসে সেভ
+        
         conn = sqlite3.connect('data.db', check_same_thread=False)
         cursor = conn.cursor()
         cursor.execute("INSERT INTO info VALUES (?, ?, ?)", (m.from_user.id, m.text, datetime.now().strftime("%d/%m/%Y")))
         conn.commit()
         conn.close()
-        bot.send_message(ADMIN_ID, f"🔔 আইডি {m.from_user.id} ফাইল পাঠাচ্ছে: {m.text}")
+        
+        # আপনার কাছে (Admin) নোটিফিকেশন যাবে
+        bot.send_message(ADMIN_ID, f"🔔 নতুন এন্ট্রি!\nইউজার আইডি: {m.from_user.id}\nটাইপ: {m.text}")
 
 init_db()
+print("বট চলছে...")
 bot.infinity_polling()
