@@ -36,7 +36,8 @@ def init_db():
     conn.close()
 
 def get_main_menu():
-    keyboard = [['🚀 Work Start'], ['📜 Rules', '💰 Price List'], ['💳 Payment Withdraw'], ['🔄 Restart']]
+    # Rules এবং Price List বাটনকে এক করা হয়েছে
+    keyboard = [['🚀 Work Start'], ['📜 Rules & Price List'], ['💳 Payment Withdraw'], ['🔄 Restart']]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -53,32 +54,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.message.reply_text(msg, reply_markup=get_main_menu())
     return ConversationHandler.END
 
-# --- অ্যাডমিন চেক কমান্ড ---
-async def check_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID: return
-    try:
-        uid = context.args[0]
-        conn = sqlite3.connect('bot_data.db'); cursor = conn.cursor()
-        cursor.execute("SELECT balance, bkash, nagad, rocket, binance, total_ids, total_files FROM users WHERE user_id=?", (uid,))
-        row = cursor.fetchone(); conn.close()
-        if row:
-            msg = (f"👤 **User Report (UID: {uid})**\n"
-                   f"💰 Current Balance: ৳{row[0]}\n"
-                   f"🆔 Total IDs Submitted: {row[5]}\n"
-                   f"📁 Total Files Sent: {row[6]}\n\n"
-                   f"🏦 **Payment Info:**\n"
-                   f"Bkash: {row[1] or 'N/A'}\nNagad: {row[2] or 'N/A'}")
-            await update.message.reply_text(msg, parse_mode='Markdown')
-        else: await update.message.reply_text("ইউজার পাওয়া যায়নি।")
-    except: await update.message.reply_text("সঠিক নিয়ম: `/check 12345678`")
-
+# --- মেনু হ্যান্ডলার ---
 async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if not text: return
 
-    # --- Restart Button Fix ---
     if 'Restart' in text:
         return await start(update, context)
+
+    # Rules & Price List লজিক (নতুন)
+    if 'Rules & Price List' in text:
+        kb = [[InlineKeyboardButton("🔗 View Rules & Price", url="https://t.me/instafbhub/19")]]
+        await update.message.reply_text(
+            "Price এবং Rules এর মেথড দেখতে নিচের লিঙ্কে ক্লিক করুন:",
+            reply_markup=InlineKeyboardMarkup(kb)
+        )
+        return
 
     if 'Work Start' in text:
         await update.message.reply_text('Category:', reply_markup=ReplyKeyboardMarkup([['🔵 Facebook'], ['🟠 Instagram'], ['🔄 Restart']], resize_keyboard=True))
@@ -103,7 +94,7 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
               [InlineKeyboardButton("✅ Withdraw Request", callback_data="req_withdraw")]]
         await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
 
-# --- সাবমিশন লজিক ---
+# --- সাবমিশন লজিক (Single ID) ---
 async def get_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['u_name'] = update.message.text
     await update.message.reply_text('ধাপ ২: পাসওয়ার্ড দিন:')
@@ -134,13 +125,12 @@ async def submit_id_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("আইডি জমা হয়েছে!", reply_markup=get_main_menu())
     return ConversationHandler.END
 
-# --- বাটন ক্লিক হ্যান্ডলার (Reject & Restart Support) ---
+# --- বাটন ক্লিক হ্যান্ডলার (Reject & Others) ---
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
     await query.answer()
 
-    # Reject Button Fix
     if data.startswith("reject_"):
         uid = int(data.split("_")[1])
         try:
@@ -219,7 +209,7 @@ def main():
     init_db(); keep_alive()
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("check", check_user))
+    
     conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('Single ID'), handle_menu), CallbackQueryHandler(callback_handler, pattern="^(set_|req_withdraw|custom_|reject_|add_6_)")],
         states={
@@ -240,4 +230,3 @@ def main():
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__': main()
-    
