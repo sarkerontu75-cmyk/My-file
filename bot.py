@@ -1,181 +1,156 @@
-import telebot
-from telebot import types
-import sqlite3
-from datetime import datetime
 import os
+import sqlite3
+import threading
 from flask import Flask
-from threading import Thread
+from telegram import ReplyKeyboardMarkup, Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
 
-# --- কনফিগারেশন ---
-TOKEN = '8603236331:AAFE7dQpKBPi1UwOSV_ar5JL3hbfjtJWyjw' 
-ADMIN_ID = 7541488098 
+# --- KEEP ALIVE SECTION ---
+app_flask = Flask('')
 
-bot = telebot.TeleBot(TOKEN)
-user_data = {}
-
-# --- Render-এ বট সচল রাখার জন্য সার্ভার ---
-app = Flask('')
-@app.route('/')
+@app_flask.route('/')
 def home():
-    return "Bot is Running!"
+    return "Bot is Alive!"
 
-def run():
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+def run_flask():
+    app_flask.run(host='0.0.0.0', port=8080)
 
 def keep_alive():
-    t = Thread(target=run)
+    t = threading.Thread(target=run_flask)
     t.start()
+# --------------------------
 
-# --- ডেটাবেস সেটআপ ---
+TOKEN = "8797001893:AAFjzHbtNGcibUu0zewY9QdOml-94bOogXE"
+ADMIN_ID = 7541488098
+
+GET_USERNAME, GET_PASS, GET_2FA, SET_PAYMENT = range(4)
+
 def init_db():
-    conn = sqlite3.connect('master_data.db', check_same_thread=False)
+    conn = sqlite3.connect('bot_data.db')
     cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS users (uid TEXT PRIMARY KEY, username TEXT)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS submissions (uid TEXT, username TEXT, type TEXT, info TEXT, date TEXT)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS payment_methods (uid TEXT PRIMARY KEY, method_type TEXT, details TEXT)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS users 
+                      (user_id INTEGER PRIMARY KEY, username TEXT, balance REAL DEFAULT 0.0, 
+                       bkash TEXT DEFAULT 'Not Set', nagad TEXT DEFAULT 'Not Set', 
+                       rocket TEXT DEFAULT 'Not Set', binance TEXT DEFAULT 'Not Set')''')
     conn.commit()
     conn.close()
 
-def save_submission(uid, username, acc_type, info):
-    conn = sqlite3.connect('master_data.db', check_same_thread=False)
+def update_user_db(user_id, username=None, field=None, value=None):
+    conn = sqlite3.connect('bot_data.db')
     cursor = conn.cursor()
-    today = datetime.now().strftime("%Y-%m-%d")
-    cursor.execute("INSERT INTO submissions VALUES (?, ?, ?, ?, ?)", (uid, username, acc_type, info, today))
+    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+    if username:
+        cursor.execute("UPDATE users SET username = ? WHERE user_id = ?", (username, user_id))
+    if field and value:
+        cursor.execute(f"UPDATE users SET {field} = ? WHERE user_id = ?", (value, user_id))
     conn.commit()
     conn.close()
 
-# --- কিবোর্ড মেনুসমূহ ---
-def main_menu():
-    m = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    m.add("FB", "IG")
-    m.add("💰 Payment Info", "🔄 Restart")
-    return m
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.message.from_user
+    update_user_db(user.id, username=user.username)
+    keyboard = [['Rules', 'Restart'], ['Payment Method', 'Work Start']]
+    await update.message.reply_text('Main Menu:', reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+    return ConversationHandler.END
 
-def payment_menu():
-    m = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    m.add("Bkash", "Nagad", "Rocket", "Binance")
-    m.add("🔙 Back")
-    return m
+async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    user = update.message.from_user
+    if text == 'Restart': return await start(update, context)
+    elif text == 'Payment Method':
+        keyboard = [[InlineKeyboardButton("Bkash", callback_data="pay_bkash"), InlineKeyboardButton("Nagad", callback_data="pay_nagad")],
+                    [InlineKeyboardButton("Rocket", callback_data="pay_rocket"), InlineKeyboardButton("Binance", callback_data="pay_binance")]]
+        await update.message.reply_text("Select a method to Update:", reply_markup=InlineKeyboardMarkup(keyboard))
+    elif text == 'Work Start':
+        await update.message.reply_text('Select option:', reply_markup=ReplyKeyboardMarkup([['FB 00 Fnd 2fa'], ['IG']], resize_keyboard=True))
+    elif text == 'FB 00 Fnd 2fa':
+        context.user_data['cat'] = "FB 00 Fnd 2fa"
+        await update.message.reply_text('FB Menu:', reply_markup=ReplyKeyboardMarkup([['File'], ['Single ID']], resize_keyboard=True))
+    elif text == 'IG':
+        await update.message.reply_text('IG Options:', reply_markup=ReplyKeyboardMarkup([['Cookies'], ['2fa'], ['Number2fa']], resize_keyboard=True))
+    elif text in ['Cookies', '2fa', 'Number2fa']:
+        context.user_data['cat'] = f"IG - {text}"
+        await update.message.reply_text(f'Selected {text}:', reply_markup=ReplyKeyboardMarkup([['File'], ['Single ID']], resize_keyboard=True))
+    elif text == 'Single ID':
+        await update.message.reply_text('Step 1: Enter Username:', reply_markup=ReplyKeyboardRemove())
+        return GET_USERNAME
+    elif text == '/admin' and user.id == ADMIN_ID:
+        conn = sqlite3.connect('bot_data.db'); cursor = conn.cursor(); cursor.execute("SELECT user_id, username FROM users"); users = cursor.fetchall(); conn.close()
+        msg = "👤 User List:\n\n"
+        for u in users: msg += f"• @{u[1]} (`{u[0]}`)\n"
+        await update.message.reply_text(msg + "\n`/check [ID]`", parse_mode='Markdown')
 
-def fb_menu():
-    m = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    m.add("FB 00 FND 2FA FILE 🗃️", "SINGLE 00 FND 2FA", "🔄 Restart")
-    return m
+async def check_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID: return
+    try:
+        uid = context.args[0]
+        conn = sqlite3.connect('bot_data.db'); cursor = conn.cursor(); cursor.execute("SELECT * FROM users WHERE user_id=?", (uid,)); d = cursor.fetchone(); conn.close()
+        if d:
+            msg = (f"👤 Profile: @{d[1]}\n🆔 ID: `{d[0]}`\n💰 Balance: ৳{d[2]}\n\n"
+                   f"🏦 Payment:\nBkash: {d[3]}\nNagad: {d[4]}\nRocket: {d[5]}\nBinance: {d[6]}")
+            await update.message.reply_text(msg, parse_mode='Markdown')
+    except: pass
 
-def ig_main_menu():
-    m = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    m.add("Ig 2fa", "IG Cookies", "🔄 Restart")
-    return m
+async def get_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['u_name'] = update.message.text
+    await update.message.reply_text('Step 2: Enter Pass:')
+    return GET_PASS
 
-def ig_2fa_submenu():
-    m = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    m.add("File", "Single ID", "🔄 Restart")
-    return m
+async def get_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['u_pass'] = update.message.text
+    await update.message.reply_text('Step 3: Enter 2FA:')
+    return GET_2FA
 
-# --- অ্যাডমিন কন্ট্রোল ---
-@bot.message_handler(commands=['admin'])
-def admin_panel(msg):
-    if msg.from_user.id == ADMIN_ID:
-        conn = sqlite3.connect('master_data.db', check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM users")
-        total_users = cursor.fetchone()[0]
-        conn.close()
-        bot.send_message(ADMIN_ID, f"🛠 **অ্যাডমিন প্যানেল**\n\n👥 মোট ইউজার: `{total_users}` জন\n🔍 চেক করতে: `/check আইডি`", parse_mode="Markdown")
+async def get_2fa(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.message.from_user
+    u_name, u_pass, u_2fa = context.user_data['u_name'], context.user_data['u_pass'], update.message.text
+    cat = context.user_data.get('cat', 'General')
+    admin_msg = f"📥 New Submission\nCat: {cat}\nFrom: @{user.username}\n\nUser: `{u_name}`\nPass: `{u_pass}`\n2FA: `{u_2fa}`"
+    kb = [[InlineKeyboardButton("৳6 Add", callback_data=f"add_6_{user.id}")]]
+    await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+    await update.message.reply_text("ID Received! আপনার আইডি রিপোর্টের জন্য ২ ঘণ্টা অপেক্ষা করুন।")
+    return await start(update, context)
 
-@bot.message_handler(commands=['check'])
-def check_user(msg):
-    if msg.from_user.id == ADMIN_ID:
-        try:
-            target_id = msg.text.split()[1]
-            conn = sqlite3.connect('master_data.db', check_same_thread=False)
-            cursor = conn.cursor()
-            cursor.execute("SELECT method_type, details FROM payment_methods WHERE uid=?", (target_id,))
-            p = cursor.fetchone()
-            cursor.execute("SELECT type, info, date FROM submissions WHERE uid=?", (target_id,))
-            rows = cursor.fetchall()
-            conn.close()
-            
-            res = f"📊 রিপোর্ট: `{target_id}`\n"
-            res += f"💰 পেমেন্ট: {f'{p[0]} ({p[1]})' if p else 'নেই'}\n\n"
-            if rows:
-                for i, r in enumerate(rows, 1): res += f"{i}. {r[0]} | {r[1]} | {r[2]}\n"
-            else: res += "কোনো কাজ নেই।"
-            bot.send_message(ADMIN_ID, res)
-        except: bot.send_message(ADMIN_ID, "ব্যবহার: `/check আইডি`")
+async def pay_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if query.data.startswith("pay_"):
+        method = query.data.split("_")[1]
+        context.user_data['editing_pay'] = method
+        await query.message.reply_text(f"Send your {method.capitalize()} address:")
+        await query.answer(); return SET_PAYMENT
+    elif query.data.startswith("add_6_"):
+        uid = int(query.data.split("_")[2])
+        conn = sqlite3.connect('bot_data.db'); cursor = conn.cursor(); cursor.execute("UPDATE users SET balance = balance + 6 WHERE user_id = ?", (uid,)); conn.commit(); conn.close()
+        await query.answer("৳6 Added!"); await query.edit_message_reply_markup(reply_markup=None)
+        try: await context.bot.send_message(chat_id=uid, text="✅ আপনার একাউন্টে ৳6 যোগ করা হয়েছে।")
+        except: pass
 
-# --- মেসেজ হ্যান্ডলার ---
-@bot.message_handler(commands=['start'])
-def start(msg):
-    uid, uname = str(msg.from_user.id), f"@{msg.from_user.username}" if msg.from_user.username else "No Name"
-    conn = sqlite3.connect('master_data.db', check_same_thread=False)
-    conn.execute("INSERT OR REPLACE INTO users VALUES (?, ?)", (uid, uname))
-    conn.commit()
-    conn.close()
-    bot.send_message(msg.chat.id, "ক্যাটাগরি বেছে নিন:", reply_markup=main_menu())
+async def save_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    method = context.user_data.get('editing_pay')
+    update_user_db(update.message.from_user.id, field=method, value=update.message.text)
+    await update.message.reply_text(f"✅ {method.capitalize()} saved!")
+    return await start(update, context)
 
-@bot.message_handler(func=lambda m: True)
-def handle_text(m):
-    uid, uname, text = str(m.from_user.id), f"@{m.from_user.username}" if m.from_user.username else "No Name", m.text
-
-    if text == "🔄 Restart" or text == "🔙 Back":
-        user_data.pop(uid, None)
-        bot.send_message(m.chat.id, "মেনুতে ফিরে আসা হয়েছে।", reply_markup=main_menu())
-    
-    elif text == "💰 Payment Info":
-        bot.send_message(m.chat.id, "পেমেন্ট মেথড বেছে নিন:", reply_markup=payment_menu())
-    
-    elif text in ["Bkash", "Nagad", "Rocket", "Binance"]:
-        user_data[uid] = {'step': 'pay', 'method': text}
-        bot.send_message(m.chat.id, f"আপনার {text} ডিটেইলস দিন:")
-    
-    elif text == "FB": bot.send_message(m.chat.id, "FB অপশন:", reply_markup=fb_menu())
-    elif text == "IG": bot.send_message(m.chat.id, "IG অপশন:", reply_markup=ig_main_menu())
-    elif text == "Ig 2fa": bot.send_message(m.chat.id, "Ig 2fa টাইপ:", reply_markup=ig_2fa_submenu())
-    
-    elif text == "IG Cookies":
-        bot.send_message(m.chat.id, "[Click Here](https://t.me/ostmd/32) এখানে সাবমিট করুন", parse_mode="Markdown")
-        save_submission(uid, uname, "IG Cookies", "Clicked Link")
-
-    elif text in ["FB 00 FND 2FA FILE 🗃️", "File"]:
-        bot.send_message(m.chat.id, "ফাইল পাঠান।")
-
-    elif text in ["SINGLE 00 FND 2FA", "Single ID"]:
-        user_data[uid] = {'step': 'u', 'type': text}
-        bot.send_message(m.chat.id, "Username দিন:")
-
-    elif uid in user_data:
-        s = user_data[uid]
-        if s.get('step') == 'pay':
-            conn = sqlite3.connect('master_data.db', check_same_thread=False)
-            conn.execute("INSERT OR REPLACE INTO payment_methods VALUES (?, ?, ?)", (uid, s['method'], text))
-            conn.commit()
-            conn.close()
-            bot.send_message(m.chat.id, "পেমেন্ট তথ্য সেভ হয়েছে।", reply_markup=main_menu())
-            bot.send_message(ADMIN_ID, f"💰 পেমেন্ট আপডেট: {uname} ({uid})\n{s['method']}: {text}")
-            user_data.pop(uid)
-        elif s.get('step') == 'u':
-            user_data[uid].update({'u': text, 'step': 'p'})
-            bot.send_message(m.chat.id, "Password দিন:")
-        elif s.get('step') == 'p':
-            user_data[uid].update({'p': text, 'step': 'k'})
-            bot.send_message(m.chat.id, "Key🔐 দিন:")
-        elif s.get('step') == 'k':
-            info = f"U: {s['u']} | P: {s['p']} | K: {text}"
-            save_submission(uid, uname, s['type'], info)
-            bot.send_message(ADMIN_ID, f"📩 নতুন আইডি!\n👤 {uname}\n🆔 `{uid}`\n📌 {s['type']}\n📝 `{info}`", parse_mode="Markdown")
-            bot.send_message(m.chat.id, "তথ্য জমা হয়েছে।", reply_markup=main_menu())
-            user_data.pop(uid)
-
-@bot.message_handler(content_types=['document'])
-def handle_docs(m):
-    uid, uname = str(m.from_user.id), f"@{m.from_user.username}" if m.from_user.username else "No Name"
-    save_submission(uid, uname, "FILE", m.document.file_name)
-    bot.send_message(ADMIN_ID, f"📄 নতুন ফাইল: {uname} ({uid})")
-    bot.forward_message(ADMIN_ID, m.chat.id, m.message_id)
-    bot.reply_to(m, "ফাইলটি জমা হয়েছে।")
-
-if __name__ == "__main__":
+def main():
     init_db()
-    keep_alive() # Render-এর জন্য সচল রাখা
-    bot.infinity_polling()
+    keep_alive() # এটি বটকে সচল রাখবে
+    app = Application.builder().token(TOKEN).build()
+    conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Text(['Single ID']), handle_menu), CallbackQueryHandler(pay_callback, pattern="^pay_")],
+        states={
+            GET_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_username)],
+            GET_PASS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_pass)],
+            GET_2FA: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_2fa)],
+            SET_PAYMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_payment)],
+        },
+        fallbacks=[CommandHandler('start', start)],
+    )
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("check", check_user))
+    app.add_handler(conv)
+    app.add_handler(CallbackQueryHandler(pay_callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
+    app.run_polling()
+
+if __name__ == '__main__':
+    main()
