@@ -1,23 +1,31 @@
+import os
 import sqlite3
 import threading
 from flask import Flask
 from telegram import ReplyKeyboardMarkup, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
 
-# --- KEEP ALIVE ---
+# --- RENDER PORT FIX ---
 app_flask = Flask('')
 @app_flask.route('/')
 def home(): return "Bot is Alive!"
-def keep_alive(): threading.Thread(target=lambda: app_flask.run(host='0.0.0.0', port=8080), daemon=True).start()
+
+def run_flask():
+    # রেন্ডার সাধারণত পোর্টের জন্য এনভায়রনমেন্ট ভেরিয়েবল ব্যবহার করে
+    port = int(os.environ.get("PORT", 8080))
+    app_flask.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    threading.Thread(target=run_flask, daemon=True).start()
 
 # কনফিগারেশন
 TOKEN = "8797001893:AAFjzHbtNGcibUu0zewY9QdOml-94bOogXE"
 ADMIN_ID = 7541488098
 
-# স্টেট নির্ধারণ
+# স্টেট
 GET_USERNAME, GET_PASS, GET_2FA, SET_WITHDRAW_VAL, ADMIN_ADD_MONEY, GET_PAY_ADDR = range(6)
 
-# ডাটাবেস ফাংশন
+# ডাটাবেস
 def init_db():
     conn = sqlite3.connect('bot_data.db')
     cursor = conn.cursor()
@@ -45,7 +53,6 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if not text: return
 
-    # --- মেইন মেনু অপশন ---
     if 'Work Start' in text:
         await update.message.reply_text('Category:', reply_markup=ReplyKeyboardMarkup([['🔵 Facebook'], ['🟠 Instagram'], ['🔄 Restart']], resize_keyboard=True))
     
@@ -54,25 +61,26 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("কিভাবে পাঠাতে চান?", reply_markup=ReplyKeyboardMarkup([['📁 File'], ['🆔 Single ID'], ['🔄 Restart']], resize_keyboard=True))
     
     elif 'Instagram' in text:
+        # ৩টি অপশন: Cookies, 2fa, Number2fa
         await update.message.reply_text('IG Options:', reply_markup=ReplyKeyboardMarkup([['🍪 Cookies'], ['🔐 2fa'], ['📱 Number2fa'], ['🔄 Restart']], resize_keyboard=True))
     
-    # --- IG সাব-ক্যাটাগরি লজিক ---
     elif text in ['🍪 Cookies', '🔐 2fa', '📱 Number2fa']:
         context.user_data['cat'] = f"IG {text}"
-        await update.message.reply_text(f"{text} এর জন্য অপশন সিলেক্ট করুন:", reply_markup=ReplyKeyboardMarkup([['📁 File'], ['🆔 Single ID'], ['🔄 Restart']], resize_keyboard=True))
+        # প্রত্যেকটির ভেতরে File এবং Single ID অপশন
+        await update.message.reply_text(f"{text} এর জন্য মোড বেছে নিন:", reply_markup=ReplyKeyboardMarkup([['📁 File'], ['🆔 Single ID'], ['🔄 Restart']], resize_keyboard=True))
 
     elif 'Single ID' in text:
         await update.message.reply_text('ধাপ ১: ইউজারনেম দিন:', reply_markup=get_main_menu())
         return GET_USERNAME
 
     elif 'File' in text:
-        await update.message.reply_text("দয়া করে আপনার Excel (.xlsx) ফাইলটি পাঠান।", reply_markup=get_main_menu())
+        await update.message.reply_text("দয়া করে আপনার **Excel (.xlsx)** ফাইলটি পাঠান।", reply_markup=get_main_menu())
 
     elif 'Payment Withdraw' in text:
         user_id = update.message.from_user.id
         conn = sqlite3.connect('bot_data.db'); cursor = conn.cursor(); cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,)); row = cursor.fetchone(); conn.close()
         balance = row[0] if row else 0.0
-        msg = f"💰 আপনার ব্যালেন্স: ৳{balance}\n⚠️ উইথড্র লিমিট: ৳৫০\n\nপেমেন্ট মেথড সেট করে রিকোয়েস্ট পাঠান।"
+        msg = f"💰 ব্যালেন্স: ৳{balance}\n⚠️ লিমিট: ৳৫০"
         kb = [[InlineKeyboardButton("Bkash", callback_data="set_bkash"), InlineKeyboardButton("Nagad", callback_data="set_nagad")],
               [InlineKeyboardButton("Rocket", callback_data="set_rocket"), InlineKeyboardButton("Binance", callback_data="set_binance")],
               [InlineKeyboardButton("✅ Save & Withdraw Request", callback_data="req_withdraw")]]
@@ -80,27 +88,21 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif 'Restart' in text: return await start(update, context)
 
-# --- সাবমিশন প্রসেস (Cookies vs Others) ---
+# --- সাবমিশন লজিক ---
 async def get_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.text in ['🔄 Restart', '🚀 Work Start']: return await start(update, context)
     context.user_data['u_name'] = update.message.text
     await update.message.reply_text('ধাপ ২: পাসওয়ার্ড দিন:', reply_markup=get_main_menu())
     return GET_PASS
 
 async def get_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.text in ['🔄 Restart', '🚀 Work Start']: return await start(update, context)
     context.user_data['u_pass'] = update.message.text
-    
-    # কুকিজ হলে ২এফএ চাইবে না
+    # শুধু Cookies হলে ২এফএ চাইবে না
     if context.user_data.get('cat') == "IG 🍪 Cookies":
         return await submit_id_final(update, context)
-    
-    # বাকি সব ক্যাটাগরিতে ২এফএ চাইবে
-    await update.message.reply_text('ধাপ ৩: ২এফএ (2FA) কোড দিন:', reply_markup=get_main_menu())
+    await update.message.reply_text('ধাপ ৩: ২এফএ (2FA) দিন:', reply_markup=get_main_menu())
     return GET_2FA
 
 async def get_2fa(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.text in ['🔄 Restart', '🚀 Work Start']: return await start(update, context)
     context.user_data['u_2fa'] = update.message.text
     return await submit_id_final(update, context)
 
@@ -111,15 +113,13 @@ async def submit_id_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u_2fa = context.user_data.get('u_2fa', 'N/A')
     cat = context.user_data.get('cat', 'General')
     
-    admin_msg = f"📥 **New Single ID Submission**\nCategory: {cat}\nFrom: @{user.username}\n\nUser: `{u_name}`\nPass: `{u_pass}`\n2FA: `{u_2fa}`"
-    kb = [[InlineKeyboardButton("৳6 Add", callback_data=f"add_6_{user.id}"), 
-           InlineKeyboardButton("❌ Reject", callback_data=f"reject_{user.id}")]]
-    
+    admin_msg = f"📥 **New Submission**\nCat: {cat}\nFrom: @{user.username}\n\nU: `{u_name}`\nP: `{u_pass}`\n2FA: `{u_2fa}`"
+    kb = [[InlineKeyboardButton("৳6 Add", callback_data=f"add_6_{user.id}"), InlineKeyboardButton("❌ Reject", callback_data=f"reject_{user.id}")]]
     await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
-    await update.message.reply_text("আপনার আইডি সফলভাবে জমা হয়েছে!", reply_markup=get_main_menu())
+    await update.message.reply_text("আইডি জমা হয়েছে!", reply_markup=get_main_menu())
     return ConversationHandler.END
 
-# --- উইথড্র ও ফাইল বাটন হ্যান্ডলার ---
+# --- বাটন ও ফাইল হ্যান্ডলার ---
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
@@ -127,35 +127,34 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("set_"):
         context.user_data['editing_method'] = data.split("_")[1]
-        await query.message.reply_text(f"আপনার {data.split('_')[1].capitalize()} অ্যাড্রেসটি লিখুন:")
+        await query.message.reply_text(f"আপনার {data.split('_')[1]} অ্যাড্রেস দিন:")
         return GET_PAY_ADDR
     elif data == "req_withdraw":
-        await query.message.reply_text("আপনি কত টাকা উইথড্র করতে চান? (সংখ্যা লিখুন)")
+        await query.message.reply_text("কত টাকা উইথড্র করতে চান?")
         return SET_WITHDRAW_VAL
     elif data.startswith("add_6_"):
         uid = int(data.split("_")[2])
         conn = sqlite3.connect('bot_data.db'); cursor = conn.cursor()
         cursor.execute("UPDATE users SET balance = balance + 6 WHERE user_id = ?", (uid,))
         conn.commit(); conn.close()
-        await context.bot.send_message(chat_id=uid, text="✅ আপনার আইডির জন্য ৳6.0 যোগ করা হয়েছে।")
+        await context.bot.send_message(chat_id=uid, text="✅ আপনার আইডিতে ৳6.0 এড হয়েছে।")
         await query.edit_message_reply_markup(reply_markup=None)
     elif data.startswith("reject_"):
         uid = int(data.split("_")[1])
-        await context.bot.send_message(chat_id=uid, text="❌ দুঃখিত, আপনার আইডিটি রিজেক্ট করা হয়েছে।")
-        await query.edit_message_text(text=query.message.text + "\n\n🚫 **Status: Rejected**")
+        await context.bot.send_message(chat_id=uid, text="❌ আপনার আইডিটি রিজেক্ট করা হয়েছে।")
+        await query.edit_message_text(text=query.message.text + "\n\n🚫 **Rejected**")
     elif data.startswith("custom_"):
         context.user_data['target_user'] = data.split("_")[1]
-        await context.bot.send_message(chat_id=ADMIN_ID, text="ইউজারের জন্য কত টাকা এড করবেন?")
+        await context.bot.send_message(chat_id=ADMIN_ID, text="টাকার পরিমাণ লিখুন:")
         return ADMIN_ADD_MONEY
 
 # --- পেমেন্ট ও এডমিন প্রসেস ---
 async def save_pay_addr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     method = context.user_data.get('editing_method')
-    update_val = update.message.text
     conn = sqlite3.connect('bot_data.db'); cursor = conn.cursor()
-    cursor.execute(f"UPDATE users SET {method} = ? WHERE user_id = ?", (update_val, update.message.from_user.id))
+    cursor.execute(f"UPDATE users SET {method} = ? WHERE user_id = ?", (update.message.text, update.message.from_user.id))
     conn.commit(); conn.close()
-    await update.message.reply_text(f"✅ {method.capitalize()} সেভ হয়েছে।", reply_markup=get_main_menu())
+    await update.message.reply_text(f"✅ {method} সেভ হয়েছে।", reply_markup=get_main_menu())
     return ConversationHandler.END
 
 async def process_withdraw_req(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -167,8 +166,8 @@ async def process_withdraw_req(update: Update, context: ContextTypes.DEFAULT_TYP
         conn = sqlite3.connect('bot_data.db'); cursor = conn.cursor()
         cursor.execute("UPDATE users SET last_withdraw_amount=?, withdraw_date=? WHERE user_id=?", (amount, now, user.id))
         cursor.execute("SELECT bkash, nagad, rocket, binance FROM users WHERE user_id=?", (user.id,))
-        p = cursor.fetchone(); conn.commit(); conn.close()
-        msg = f"🔔 **Withdraw Request**\nUser: @{user.username}\nAmount: ৳{amount}\n\nBkash: {p[0]}\nNagad: {p[1]}\nRocket: {p[2]}\nBinance: {p[3]}"
+        p = cursor.fetchone(); conn.close()
+        msg = f"🔔 **Withdraw Req**\nUser: @{user.username}\nAmount: ৳{amount}\n\nBkash: {p[0]}\nNagad: {p[1]}\nRocket: {p[2]}\nBinance: {p[3]}"
         await context.bot.send_message(chat_id=ADMIN_ID, text=msg)
         await update.message.reply_text("✅ রিকোয়েস্ট পাঠানো হয়েছে।", reply_markup=get_main_menu())
     except: await update.message.reply_text("ভুল ইনপুট।")
@@ -181,18 +180,18 @@ async def admin_add_money_process(update: Update, context: ContextTypes.DEFAULT_
         conn = sqlite3.connect('bot_data.db'); cursor = conn.cursor()
         cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, uid))
         conn.commit(); conn.close()
-        await context.bot.send_message(chat_id=uid, text=f"✅ আপনার একাউন্টে ৳{amount} যোগ হয়েছে।")
-        await update.message.reply_text(f"৳{amount} এড করা হয়েছে।")
-    except: await update.message.reply_text("সংখ্যা লিখুন।")
+        await context.bot.send_message(chat_id=uid, text=f"✅ ৳{amount} এড হয়েছে।")
+        await update.message.reply_text("সফল হয়েছে।")
+    except: await update.message.reply_text("সংখ্যা দিন।")
     return ConversationHandler.END
 
 async def handle_docs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
     if update.message.document.file_name.lower().endswith('.xlsx'):
-        caption = f"📄 **New Excel File**\nFrom: @{user.username}\nID: `{user.id}`"
+        caption = f"📄 **New Excel**\nFrom: @{user.username}\nID: `{user.id}`"
         kb = [[InlineKeyboardButton("💰 Add Custom Money", callback_data=f"custom_{user.id}")]]
         await context.bot.send_document(chat_id=ADMIN_ID, document=update.message.document.file_id, caption=caption, reply_markup=InlineKeyboardMarkup(kb))
-        await update.message.reply_text('ফাইলটি পাওয়া গেছে।', reply_markup=get_main_menu())
+        await update.message.reply_text('ফাইল পাওয়া গেছে।', reply_markup=get_main_menu())
     else:
         await update.message.reply_text('❌ শুধু .xlsx ফাইল দিন।')
 
@@ -220,4 +219,3 @@ def main():
     app.run_polling()
 
 if __name__ == '__main__': main()
-                                   
