@@ -27,10 +27,12 @@ GET_USERNAME, GET_PASS, GET_2FA, SET_WITHDRAW_VAL, ADMIN_ADD_MONEY, GET_PAY_ADDR
 def init_db():
     conn = sqlite3.connect('bot_data.db')
     cursor = conn.cursor()
+    # daily_count এবং last_submit_date কলাম যোগ করা হয়েছে
     cursor.execute('''CREATE TABLE IF NOT EXISTS users 
                       (user_id INTEGER PRIMARY KEY, username TEXT, balance REAL DEFAULT 0.0, 
                        bkash TEXT, nagad TEXT, rocket TEXT, binance TEXT, 
-                       total_ids INTEGER DEFAULT 0, total_files INTEGER DEFAULT 0, join_date TEXT)''')
+                       total_ids INTEGER DEFAULT 0, total_files INTEGER DEFAULT 0, 
+                       join_date TEXT, daily_count INTEGER DEFAULT 0, last_submit_date TEXT)''')
     conn.commit()
     conn.close()
 
@@ -53,15 +55,19 @@ async def check_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         uid = int(context.args[0])
         conn = sqlite3.connect('bot_data.db'); cursor = conn.cursor()
-        cursor.execute("SELECT balance, bkash, nagad, rocket, binance, total_ids, total_files FROM users WHERE user_id=?", (uid,))
+        cursor.execute("SELECT balance, bkash, nagad, rocket, binance, total_ids, total_files, daily_count, last_submit_date FROM users WHERE user_id=?", (uid,))
         data = cursor.fetchone()
         conn.close()
+        
+        today = datetime.now().strftime("%Y-%m-%d")
+        daily_ids = data[7] if data[8] == today else 0
+        
         if data:
             msg = (f"👤 **User Stats (ID: {uid})**\n\n"
                    f"💰 Balance: ৳{data[0]}\n"
+                   f"📅 Today's IDs: {daily_ids}\n"
                    f"🆔 Total IDs: {data[5]} | 📂 Files: {data[6]}\n"
-                   f"🏦 Bkash: {data[1]}\n🏦 Nagad: {data[2]}\n"
-                   f"🏦 Rocket: {data[3]}\n🏦 Binance: {data[4]}")
+                   f"🏦 B: {data[1]} | N: {data[2]} | R: {data[3]} | Bin: {data[4]}")
             await update.message.reply_text(msg, parse_mode='Markdown')
         else: await update.message.reply_text("ইউজার পাওয়া যায়নি।")
     except: await update.message.reply_text("সঠিকভাবে লিখুন: /check [user_id]")
@@ -116,8 +122,25 @@ async def get_2fa(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def submit_id_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
+    today = datetime.now().strftime("%Y-%m-%d")
     cat = context.user_data.get('cat', 'N/A')
-    admin_msg = (f"📥 **New Submission**\nUID: `{user.id}`\nCat: {cat}\n\n"
+    
+    # ডেইলি কাউন্ট লজিক
+    conn = sqlite3.connect('bot_data.db'); cursor = conn.cursor()
+    cursor.execute("SELECT daily_count, last_submit_date FROM users WHERE user_id=?", (user.id,))
+    row = cursor.fetchone()
+    
+    new_daily_count = 1
+    if row and row[1] == today:
+        new_daily_count = row[0] + 1
+    
+    cursor.execute("UPDATE users SET total_ids = total_ids + 1, daily_count = ?, last_submit_date = ? WHERE user_id = ?", 
+                   (new_daily_count, today, user.id))
+    conn.commit(); conn.close()
+
+    admin_msg = (f"📥 **New Submission**\nUID: `{user.id}`\n"
+                 f"Today's Total: `{new_daily_count}`\n"
+                 f"Cat: {cat}\n\n"
                  f"U: `{context.user_data.get('u_name')}`\nP: `{context.user_data.get('u_pass')}`\n"
                  f"2FA: `{context.user_data.get('u_2fa', 'N/A')}`")
     
@@ -229,4 +252,3 @@ def main():
     app.run_polling()
 
 if __name__ == '__main__': main()
-    
