@@ -48,7 +48,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_message.reply_text("স্বাগতম! কাজ শুরু করতে নিচের বাটন ব্যবহার করুন।", reply_markup=get_main_menu())
     return ConversationHandler.END
 
-# --- অ্যাডমিন চেক কমান্ড ---
 async def check_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
     try:
@@ -100,7 +99,6 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
               [InlineKeyboardButton("✅ Save & Withdraw Request", callback_data="req_withdraw")]]
         await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
 
-# --- সাবমিশন ---
 async def get_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['u_name'] = update.message.text
     await update.message.reply_text('ধাপ ২: পাসওয়ার্ড দিন:')
@@ -123,7 +121,6 @@ async def submit_id_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
                  f"U: `{context.user_data.get('u_name')}`\nP: `{context.user_data.get('u_pass')}`\n"
                  f"2FA: `{context.user_data.get('u_2fa', 'N/A')}`")
     
-    # বাটন লজিক
     if "Number2fa" in cat:
         kb = [[InlineKeyboardButton("💰 Add Money", callback_data=f"custom_{user.id}"), InlineKeyboardButton("❌ Reject", callback_data=f"rej_{user.id}")]]
     else:
@@ -133,10 +130,19 @@ async def submit_id_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("আইডি জমা হয়েছে!", reply_markup=get_main_menu())
     return ConversationHandler.END
 
-# --- কলব্যাক হ্যান্ডলার ---
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; data = query.data; await query.answer()
+    
+    if data.startswith("set_"):
+        context.user_data['editing_method'] = data.split("_")[1]
+        await query.message.reply_text(f"আপনার {data.split('_')[1]} নম্বর দিন:")
+        return GET_PAY_ADDR
+    elif data == "req_withdraw":
+        await query.message.reply_text("কত টাকা তুলতে চান?")
+        return SET_WITHDRAW_VAL
+    
     uid = int(data.split("_")[1]) if "_" in data else None
+    if not uid: return
 
     if data.startswith("acc_"):
         await context.bot.send_message(chat_id=uid, text="✅ আপনার আইডিটি রিসিভ করা হয়েছে, রিপোর্টের জন্য অপেক্ষা করুন।")
@@ -148,13 +154,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['target_user'] = uid
         await query.message.reply_text("টাকার পরিমাণ লিখুন:")
         return ADMIN_ADD_MONEY
-    elif data == "req_withdraw":
-        await query.message.reply_text("কত টাকা তুলতে চান?")
-        return SET_WITHDRAW_VAL
-    elif data.startswith("set_"):
-        context.user_data['editing_method'] = data.split("_")[1]
-        await query.message.reply_text(f"আপনার {data.split('_')[1]} নম্বর দিন:")
-        return GET_PAY_ADDR
 
 async def handle_docs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
@@ -168,7 +167,6 @@ async def handle_docs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_document(chat_id=ADMIN_ID, document=update.message.document.file_id, caption=caption, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
         await update.message.reply_text('ফাইল পাওয়া গেছে!', reply_markup=get_main_menu())
 
-# --- পেমেন্ট ও অ্যাডমিন প্রসেস ---
 async def save_pay_addr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     method = context.user_data.get('editing_method')
     conn = sqlite3.connect('bot_data.db'); cursor = conn.cursor()
@@ -206,11 +204,11 @@ async def process_withdraw_req(update: Update, context: ContextTypes.DEFAULT_TYP
 def main():
     init_db()
     app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("check", check_user))
-    
     conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex('Single ID'), handle_menu), CallbackQueryHandler(callback_handler, pattern="^(set_|req_withdraw|custom_|acc_|rej_)")],
+        entry_points=[
+            MessageHandler(filters.Regex('Single ID'), handle_menu),
+            CallbackQueryHandler(callback_handler, pattern="^(set_|req_withdraw|custom_|acc_|rej_)")
+        ],
         states={
             GET_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_username)],
             GET_PASS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_pass)],
@@ -219,9 +217,11 @@ def main():
             SET_WITHDRAW_VAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_withdraw_req)],
             ADMIN_ADD_MONEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_add_money_process)],
         },
-        fallbacks=[CommandHandler('start', start)],
+        fallbacks=[CommandHandler('start', start), MessageHandler(filters.Regex('Restart'), start)],
         allow_reentry=True
     )
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("check", check_user))
     app.add_handler(conv)
     app.add_handler(MessageHandler(filters.Document.ALL, handle_docs))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
@@ -229,3 +229,4 @@ def main():
     app.run_polling()
 
 if __name__ == '__main__': main()
+    
